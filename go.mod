@@ -19,6 +19,7 @@ require (
 	github.com/bgentry/speakeasy v0.1.0
 	github.com/coreos/go-semver v0.3.0
 	github.com/dustin/go-humanize v1.0.0
+	github.com/pborman/uuid v1.2.1
 	github.com/spf13/cobra v1.2.1
 	go.etcd.io/bbolt v1.3.6
 	go.etcd.io/etcd/api/v3 v3.5.0
@@ -50,6 +51,7 @@ require (
 	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/google/btree v1.0.1 // indirect
 	github.com/google/go-cmp v0.5.6 // indirect
+	github.com/google/uuid v1.1.2 // indirect
 	github.com/gorilla/websocket v1.4.2 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware v1.3.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0 // indirect
