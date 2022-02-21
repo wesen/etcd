@@ -262,10 +262,6 @@ func (pq *PrintQueue) handleAssignedRequest(pqs *internalPrinterQueueState, pr *
 func (pq *PrintQueue) Tick() {
 	pqs := pq.computeInternalPrintQueueState()
 
-	log.Debugw("assigned print requests", "assignedPrintRequest", pqs.assignmentsByPrintRequestID)
-	idleNames := getPrinterNames(pqs.idlePrinters)
-	log.Debugw("idlePrinters", "idlePrinters", idleNames)
-
 	for _, pr := range pq.Requests {
 		_, isPrAssigned := pqs.assignmentsByPrintRequestID[pr.ID]
 		if len(pqs.idlePrinters) == 0 {
@@ -367,7 +363,4 @@ func getPrinterNames(printers []*Printer) []string {
 		names = append(names, printer.Name)
 	}
 	return names
-}
-
-func main() {
 }

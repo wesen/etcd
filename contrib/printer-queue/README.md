@@ -2,6 +2,16 @@
 ## Overview
 We want to design a distributed print queue to print PDFs across a fleet of network connected printers.
 
+## TODO
+
+- [ ] Add assignment timeout behaviour
+- [ ] Add heartbeat and last seen alive functionality]
+- [/] Add claiming of prints
+- [/] Simulate a real printer (that starts a job after a bit, emits status updates)
+- [/] Add http server for the "pure" print queue
+- [ ] Keep track of which printer has which document so that they can be downloaded
+- [ ] Handle the fact that assignment is actually not something reported by the printer in its status
+
 ## Desired behaviour
 ### Glossary
 
