@@ -169,6 +169,7 @@ func (pq *PrintQueue) assignPrintRequest(pr *PrintRequest, p *Printer) (*PrintAs
 
 func (pq *PrintQueue) unassignFromPrinter(pqs *internalPrinterQueueState, printer *Printer) {
 	assignment := printer.Assignment
+	log.Debugw("Unassigning from printer", "pr.ID", assignment, "printer", printer.Name)
 	printRequest, ok := pqs.printRequestsByID[assignment.PrintRequestID]
 	if !ok {
 		log.Errorw("Cannot find assigned print request"+
@@ -193,6 +194,54 @@ func (pq *PrintQueue) unassignFromPrinter(pqs *internalPrinterQueueState, printe
 // if there is an idle printer.
 
 // let's call this reconciliation Tick()
+func (pq *PrintQueue) handleUnassignedRequest(pqs *internalPrinterQueueState, pr *PrintRequest) {
+	// Print requests is not assigned, look for an idle printer
+	if len(pqs.idlePrinters) > 0 {
+		idlePrinter := pqs.idlePrinters[0]
+		_, err := pq.assignPrintRequest(pr, idlePrinter)
+		if err != nil {
+			log.Errorw("error assigning print request", "error", err)
+			return
+		}
+		pqs.idlePrinters = pqs.idlePrinters[1:]
+	}
+}
+
+func (pq *PrintQueue) handleAssignedRequest(pqs *internalPrinterQueueState, pr *PrintRequest) {
+	printer, ok := pqs.printersByAssignedPrintRequestID[pr.ID]
+	if !ok {
+		log.Errorw("Assigned print request has no printer", "pr.ID", pr.ID)
+		return
+	}
+
+	// just a sanity check
+	if printer.Assignment == nil {
+		panic("printer should have an assignment")
+	}
+
+	if printer.State == PrinterBusy {
+		pq.unassignFromPrinter(pqs, printer)
+		return
+	}
+	if printer.State == PrinterPrinting {
+		currentPrint, hasPrint := pqs.currentPrintsByPrinterId[printer.ID]
+
+		if !hasPrint {
+			log.Errorw("Printer is printing, but no current print", "printer", printer.Name)
+			return
+		}
+
+		if currentPrint.AssignmentID == nil || *currentPrint.AssignmentID != printer.Assignment.ID {
+			log.Warnw("Printer is printing, but current print is not assigned to this printer",
+				"printer", printer.Name,
+				"currentPrint", currentPrint.ID,
+				"currentPrintAssignment", currentPrint.AssignmentID,
+				"printerAssignment", printer.Assignment.ID)
+			pq.unassignFromPrinter(pqs, printer)
+			return
+		}
+	}
+}
 
 func (pq *PrintQueue) Tick() {
 	pqs := pq.computeInternalPrintQueueState()
@@ -203,49 +252,33 @@ func (pq *PrintQueue) Tick() {
 
 	for _, pr := range pq.Requests {
 		_, isPrAssigned := pqs.assignmentsByPrintRequestID[pr.ID]
-		log.Debugw("isPrAssigned", "pr.ID", pr.ID, "isPrAssigned", isPrAssigned)
+		if len(pqs.idlePrinters) == 0 {
+			break
+		}
 		if !isPrAssigned {
-			if len(pqs.idlePrinters) > 0 {
-				idlePrinter := pqs.idlePrinters[0]
-				_, err := pq.assignPrintRequest(pr, idlePrinter)
-				if err != nil {
-					log.Errorw("error assigning print request", "error", err)
-					continue
-				}
-				pqs.idlePrinters = pqs.idlePrinters[1:]
-			} else {
-				break
-			}
+			pq.handleUnassignedRequest(pqs, pr)
 		} else {
-			printer, ok := pqs.printersByPrintRequestID[pr.ID]
-			if !ok {
-				log.Errorw("Assigned print request has no printer", "pr.ID", pr.ID)
-				continue
-			}
-			if printer.State == PrinterBusy {
-				log.Debugw("Unassigning from printer", "pr.ID", pr.ID, "printer", printer.Name)
-				pq.unassignFromPrinter(pqs, printer)
-			}
+			pq.handleAssignedRequest(pqs, pr)
 		}
 	}
 }
 
 type internalPrinterQueueState struct {
-	assignmentsByPrintRequestID map[string]*PrintAssignment
-	printersByPrintRequestID    map[string]*Printer
-	printRequestsByID           map[string]*PrintRequest
-	idlePrinters                []*Printer
-	currentPrintsByPrinterId    map[string]*Print
-	assignedPrintByPrinterId    map[string]*Print
+	assignmentsByPrintRequestID      map[string]*PrintAssignment
+	printersByAssignedPrintRequestID map[string]*Printer
+	printRequestsByID                map[string]*PrintRequest
+	idlePrinters                     []*Printer
+	currentPrintsByPrinterId         map[string]*Print
+	assignedPrintByPrinterId         map[string]*Print
 }
 
 func (pq *PrintQueue) computeInternalPrintQueueState() *internalPrinterQueueState {
 	pqs := &internalPrinterQueueState{
-		assignmentsByPrintRequestID: make(map[string]*PrintAssignment),
-		printersByPrintRequestID:    make(map[string]*Printer),
-		printRequestsByID:           make(map[string]*PrintRequest),
-		currentPrintsByPrinterId:    make(map[string]*Print),
-		assignedPrintByPrinterId:    make(map[string]*Print),
+		assignmentsByPrintRequestID:      make(map[string]*PrintAssignment),
+		printersByAssignedPrintRequestID: make(map[string]*Printer),
+		printRequestsByID:                make(map[string]*PrintRequest),
+		currentPrintsByPrinterId:         make(map[string]*Print),
+		assignedPrintByPrinterId:         make(map[string]*Print),
 	}
 
 	for _, printer := range pq.Printers {
@@ -262,7 +295,7 @@ func (pq *PrintQueue) computeInternalPrintQueueState() *internalPrinterQueueStat
 					"printerID", printer.ID,
 					"previousPrinterID", assignment.PrinterID)
 			}
-			pqs.printersByPrintRequestID[assignment.PrintRequestID] = printer
+			pqs.printersByAssignedPrintRequestID[assignment.PrintRequestID] = printer
 			pqs.assignmentsByPrintRequestID[assignment.PrintRequestID] = assignment
 		}
 
