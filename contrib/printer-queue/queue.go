@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/pborman/uuid"
+	"fmt"
 	"go.uber.org/zap"
 	"time"
 )
@@ -10,8 +10,43 @@ var (
 	log = zap.NewExample().Sugar()
 )
 
+var (
+	nextDocumentId        = 0
+	nextPrintAssignmentId = 0
+	nextPrintRequestId    = 0
+	nextPrinterId         = 0
+)
+
+func resetIds() {
+	nextDocumentId = 0
+	nextPrintAssignmentId = 0
+	nextPrintRequestId = 0
+	nextPrinterId = 0
+}
+
+func newDocumentId() string {
+	res := fmt.Sprintf("D%d", nextDocumentId)
+	nextDocumentId++
+	return res
+}
+func newPrinterAssignmentId() string {
+	res := fmt.Sprintf("PA%d", nextPrintAssignmentId)
+	nextPrintAssignmentId++
+	return res
+}
+func newPrintRequestID() string {
+	res := fmt.Sprintf("PR%d", nextPrintRequestId)
+	nextPrintRequestId++
+	return res
+}
+func newPrinterID() string {
+	res := fmt.Sprintf("P%d", nextPrinterId)
+	nextPrinterId++
+	return res
+}
+
 type Document struct {
-	ID uuid.UUID
+	ID string
 }
 
 type PrintRequestState string
@@ -25,16 +60,16 @@ const (
 )
 
 type PrintRequest struct {
-	ID         uuid.UUID
+	ID         string
 	State      PrintRequestState
-	DocumentID uuid.UUID
+	DocumentID string
 }
 
 type PrintAssignment struct {
-	ID             uuid.UUID
-	PrintRequestID uuid.UUID
-	DocumentID     uuid.UUID
-	PrinterID      uuid.UUID
+	ID             string
+	PrintRequestID string
+	DocumentID     string
+	PrinterID      string
 	Claimed        bool
 }
 
@@ -47,9 +82,9 @@ const (
 )
 
 type Print struct {
-	ID           uuid.UUID
-	DocumentID   uuid.UUID
-	AssignmentID *uuid.UUID
+	ID           string
+	DocumentID   string
+	AssignmentID *string
 	State        PrintState
 }
 
@@ -62,11 +97,11 @@ const (
 )
 
 type Printer struct {
-	ID         uuid.UUID
+	ID         string
 	Name       string
 	Documents  []Document
 	State      PrinterState
-	Prints     []Print
+	Prints     []*Print
 	LastSeen   time.Time
 	Assignment *PrintAssignment
 }
@@ -74,7 +109,7 @@ type Printer struct {
 func (p *Printer) GetCurrentPrint() *Print {
 	for _, _print := range p.Prints {
 		if _print.State == PrintPrinting {
-			return &_print
+			return _print
 		}
 	}
 	return nil
@@ -87,22 +122,22 @@ type PrintQueue struct {
 
 func (pq *PrintQueue) GetDocuments() []Document {
 	var res []Document
-	var seenIds map[string]struct{} = make(map[string]struct{})
+	seenIds := map[string]struct{}{}
 	for _, printer := range pq.Printers {
 		for _, document := range printer.Documents {
-			if _, ok := seenIds[document.ID.String()]; ok {
+			if _, ok := seenIds[document.ID]; ok {
 				continue
 			}
 			res = append(res, document)
-			seenIds[document.ID.String()] = struct{}{}
+			seenIds[document.ID] = struct{}{}
 		}
 	}
 	return res
 }
 
-func (p *Printer) GetDocument(id uuid.UUID) (*Document, bool) {
+func (p *Printer) GetDocument(id string) (*Document, bool) {
 	for _, doc := range p.Documents {
-		if uuid.Equal(doc.ID, id) {
+		if doc.ID == id {
 			return &doc, true
 		}
 	}
@@ -121,27 +156,28 @@ func (pq *PrintQueue) assignPrintRequest(pr *PrintRequest, p *Printer) (*PrintAs
 	}
 	pr.State = PrintRequestAssigned
 	p.Assignment = &PrintAssignment{
-		ID:             uuid.NewRandom(),
+		ID:             newPrinterAssignmentId(),
 		PrintRequestID: pr.ID,
 		DocumentID:     pr.DocumentID,
 		PrinterID:      p.ID,
 		Claimed:        false,
 	}
-	log.Debugw("assigning to", "printer", p.ID.String(), "pr.ID", pr.ID.String())
+	log.Debugw("assigning to", "printer", p.ID, "pr.ID", pr.ID)
 
 	return p.Assignment, nil
 }
 
 func (pq *PrintQueue) unassignFromPrinter(pqs *internalPrinterQueueState, printer *Printer) {
 	assignment := printer.Assignment
-	printRequest, ok := pqs.printRequestsByID[assignment.PrintRequestID.String()]
+	printRequest, ok := pqs.printRequestsByID[assignment.PrintRequestID]
 	if !ok {
 		log.Errorw("Cannot find assigned print request"+
-			" for printer", "printer", printer.ID.String(),
-			"assignment", assignment.ID.String(),
-			"printRequest", assignment.PrintRequestID.String())
+			" for printer", "printer", printer.ID,
+			"assignment", assignment.ID,
+			"printRequest", assignment.PrintRequestID)
+	} else {
+		printRequest.State = PrintRequestPendingAssignment
 	}
-	printRequest.State = PrintRequestPendingAssignment
 	printer.Assignment = nil
 }
 
@@ -159,15 +195,15 @@ func (pq *PrintQueue) unassignFromPrinter(pqs *internalPrinterQueueState, printe
 // let's call this reconciliation Tick()
 
 func (pq *PrintQueue) Tick() {
-	pqs := pq.getInternalPrintQueueState()
+	pqs := pq.computeInternalPrintQueueState()
 
 	log.Debugw("assigned print requests", "assignedPrintRequest", pqs.assignmentsByPrintRequestID)
 	idleNames := getPrinterNames(pqs.idlePrinters)
 	log.Debugw("idlePrinters", "idlePrinters", idleNames)
 
 	for _, pr := range pq.Requests {
-		_, isPrAssigned := pqs.assignmentsByPrintRequestID[pr.ID.String()]
-		log.Debugw("isPrAssigned", "pr.ID", pr.ID.String(), "isPrAssigned", isPrAssigned)
+		_, isPrAssigned := pqs.assignmentsByPrintRequestID[pr.ID]
+		log.Debugw("isPrAssigned", "pr.ID", pr.ID, "isPrAssigned", isPrAssigned)
 		if !isPrAssigned {
 			if len(pqs.idlePrinters) > 0 {
 				idlePrinter := pqs.idlePrinters[0]
@@ -181,13 +217,13 @@ func (pq *PrintQueue) Tick() {
 				break
 			}
 		} else {
-			printer, ok := pqs.printersByPrintRequestID[pr.ID.String()]
+			printer, ok := pqs.printersByPrintRequestID[pr.ID]
 			if !ok {
-				log.Errorw("Assigned print request has no printer", "pr.ID", pr.ID.String())
+				log.Errorw("Assigned print request has no printer", "pr.ID", pr.ID)
 				continue
 			}
 			if printer.State == PrinterBusy {
-				log.Debugw("Unassigning from printer", "pr.ID", pr.ID.String(), "printer", printer.Name)
+				log.Debugw("Unassigning from printer", "pr.ID", pr.ID, "printer", printer.Name)
 				pq.unassignFromPrinter(pqs, printer)
 			}
 		}
@@ -199,42 +235,63 @@ type internalPrinterQueueState struct {
 	printersByPrintRequestID    map[string]*Printer
 	printRequestsByID           map[string]*PrintRequest
 	idlePrinters                []*Printer
+	currentPrintsByPrinterId    map[string]*Print
+	assignedPrintByPrinterId    map[string]*Print
 }
 
-func (pq *PrintQueue) getInternalPrintQueueState() *internalPrinterQueueState {
-	assignmentsByPrintRequestID := map[string]*PrintAssignment{}
-	printersByPrintRequestID := map[string]*Printer{}
-	var idlePrinters []*Printer
+func (pq *PrintQueue) computeInternalPrintQueueState() *internalPrinterQueueState {
+	pqs := &internalPrinterQueueState{
+		assignmentsByPrintRequestID: make(map[string]*PrintAssignment),
+		printersByPrintRequestID:    make(map[string]*Printer),
+		printRequestsByID:           make(map[string]*PrintRequest),
+		currentPrintsByPrinterId:    make(map[string]*Print),
+		assignedPrintByPrinterId:    make(map[string]*Print),
+	}
+
 	for _, printer := range pq.Printers {
 		if printer.State == PrinterIdle {
-			log.Debugw("Printer is idle", "printer", printer.Name, "state", printer.State)
-			idlePrinters = append(idlePrinters, printer)
+			pqs.idlePrinters = append(pqs.idlePrinters, printer)
 		}
 
 		assignment := printer.Assignment
 		if assignment != nil {
-			_, alreadyAssigned := assignmentsByPrintRequestID[assignment.PrintRequestID.String()]
+			_, alreadyAssigned := pqs.assignmentsByPrintRequestID[assignment.PrintRequestID]
 			if alreadyAssigned {
 				log.Errorw("PrintRequest is already assigned",
-					"assignmentID", assignment.ID.String(),
-					"printerID", printer.ID.String(),
-					"previousPrinterID", assignment.PrinterID.String())
+					"assignmentID", assignment.ID,
+					"printerID", printer.ID,
+					"previousPrinterID", assignment.PrinterID)
 			}
-			printersByPrintRequestID[assignment.PrintRequestID.String()] = printer
-			assignmentsByPrintRequestID[assignment.PrintRequestID.String()] = assignment
+			pqs.printersByPrintRequestID[assignment.PrintRequestID] = printer
+			pqs.assignmentsByPrintRequestID[assignment.PrintRequestID] = assignment
+		}
+
+		for _, _print := range printer.Prints {
+			if _print.State == PrintPrinting {
+				_, alreadyPrinting := pqs.currentPrintsByPrinterId[printer.ID]
+				if alreadyPrinting {
+					log.Errorw("Printer is already printing",
+						"printerID", printer.ID,
+						"previousPrintID", _print.ID)
+				}
+				pqs.currentPrintsByPrinterId[printer.ID] = _print
+			}
+			if assignment != nil && _print.AssignmentID != nil && *_print.AssignmentID == assignment.ID {
+				_, alreadyAssigned := pqs.assignedPrintByPrinterId[printer.ID]
+				if alreadyAssigned {
+					log.Errorw("Printer is already assigned",
+						"printerID", printer.ID,
+						"previousPrintID", _print.ID)
+				}
+				pqs.assignedPrintByPrinterId[printer.ID] = _print
+			}
 		}
 	}
 
-	var printRequestsById = map[string]*PrintRequest{}
 	for _, printRequest := range pq.Requests {
-		printRequestsById[printRequest.ID.String()] = printRequest
+		pqs.printRequestsByID[printRequest.ID] = printRequest
 	}
-	return &internalPrinterQueueState{
-		assignmentsByPrintRequestID: assignmentsByPrintRequestID,
-		printersByPrintRequestID:    printersByPrintRequestID,
-		idlePrinters:                idlePrinters,
-		printRequestsByID:           printRequestsById,
-	}
+	return pqs
 }
 
 func getPrinterNames(printers []*Printer) []string {

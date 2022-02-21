@@ -16,8 +16,7 @@ type PrinterAlreadyAssigned struct {
 
 func (paa PrinterAlreadyAssigned) Error() string {
 	assignment := paa.Printer.Assignment
-	return fmt.Sprintf("Printer already assigned %s (PR: %s)",
-		assignment.ID.String(), assignment.PrintRequestID.String())
+	return fmt.Sprintf("Printer already assigned %s (PR: %s)", assignment.ID, assignment.PrintRequestID)
 }
 
 type PrinterNotIdle struct {

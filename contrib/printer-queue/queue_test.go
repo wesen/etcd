@@ -7,49 +7,45 @@ import (
 	"testing"
 )
 
-var (
-	startId            = 1
-	printerIds         = createIds(3)
-	docIds             = createIds(10)
-	printRequestIds    = createIds(4)
-	printAssignmentIds = createIds(4)
+func createDocIds(count int) []string {
+	var ids []string
+	for i := 0; i < count; i++ {
+		ids = append(ids, newDocumentId())
+	}
+	return ids
+}
 
+var (
+	docIds        = createDocIds(10)
 	printRequests = []*PrintRequest{
 		{
-			ID:         printRequestIds[0],
+			ID:         newPrintRequestID(),
 			DocumentID: docIds[0],
 			State:      PrintRequestPendingAssignment,
 		},
 		{
-			ID:         printRequestIds[1],
+			ID:         newPrintRequestID(),
 			DocumentID: docIds[1],
 			State:      PrintRequestPendingAssignment,
 		},
 		{
-			ID:         printRequestIds[2],
+			ID:         newPrintRequestID(),
 			DocumentID: docIds[2],
 			State:      PrintRequestPendingAssignment,
 		},
 		{
-			ID:         printRequestIds[3],
+			ID:         newPrintRequestID(),
 			DocumentID: docIds[3],
 			State:      PrintRequestPendingAssignment,
 		}}
 )
 
-func createIds(len int) []uuid.UUID {
-	ids := make([]uuid.UUID, len)
-	for i := range ids {
-		ids[i] = uuid.Parse(fmt.Sprintf("00000000-0000-0000-0000-00000000%04d", startId))
-		startId++
-	}
-	return ids
-}
 func createPrinterQueue() PrintQueue {
+	resetIds()
 	pq := PrintQueue{
 		Printers: []*Printer{
 			{
-				ID:    printerIds[0],
+				ID:    newPrinterID(),
 				Name:  "P0",
 				State: PrinterIdle,
 				Documents: []Document{
@@ -58,7 +54,7 @@ func createPrinterQueue() PrintQueue {
 				},
 			},
 			{
-				ID:    printerIds[1],
+				ID:    newPrinterID(),
 				Name:  "P1",
 				State: PrinterIdle,
 				Documents: []Document{
@@ -77,18 +73,18 @@ func uuidsToStrings(uuids []uuid.UUID) []string {
 	}
 	return strs
 }
-func createPrintAssignment(i int, docIds []uuid.UUID) *PrintAssignment {
+func createPrintAssignment(i int) *PrintAssignment {
 	return &PrintAssignment{
-		ID:             printAssignmentIds[i],
-		PrintRequestID: printRequestIds[i],
-		PrinterID:      printerIds[i],
-		DocumentID:     docIds[i],
+		ID:             newPrinterAssignmentId(),
+		PrintRequestID: fmt.Sprintf("PR%d", i),
+		PrinterID:      fmt.Sprintf("P%d", i),
+		DocumentID:     fmt.Sprintf("D%d", i),
 	}
 }
 func getDocIds(docs []Document) []string {
 	var ids []string
 	for _, v := range docs {
-		ids = append(ids, v.ID.String())
+		ids = append(ids, v.ID)
 	}
 	return ids
 }
@@ -100,7 +96,7 @@ func TestListDocumentsSimple(t *testing.T) {
 	allDocs := pq.GetDocuments()
 	allDocIds := getDocIds(allDocs)
 
-	assert.ElementsMatch(t, allDocIds, uuidsToStrings(docIds[:4]))
+	assert.ElementsMatch(t, allDocIds, docIds[:4])
 }
 
 // Test that we correctly remove duplicates from the document list
@@ -111,7 +107,7 @@ func TestListDocumentsDouble(t *testing.T) {
 	allDocs := pq.GetDocuments()
 	allDocIds := getDocIds(allDocs)
 
-	assert.ElementsMatch(t, allDocIds, uuidsToStrings(docIds[1:4]))
+	assert.ElementsMatch(t, allDocIds, docIds[1:4])
 }
 
 // Test that an idle printer gets assigned a print request without assignment
@@ -125,11 +121,10 @@ func TestPrintAssignmentWhenPrinterIdle(t *testing.T) {
 
 	assignment := pq.Printers[0].Assignment
 	assert.NotNil(t, assignment)
-	assert.EqualValues(t, printRequestIds[0].String(),
-		assignment.PrintRequestID.String())
-	assert.EqualValues(t, printerIds[0].String(),
-		assignment.PrinterID.String())
-	assert.EqualValues(t, docIds[0].String(), assignment.DocumentID.String())
+	assert.EqualValues(t, printRequests[0].ID, assignment.PrintRequestID)
+	assert.EqualValues(t, pq.Printers[0].ID,
+		assignment.PrinterID)
+	assert.EqualValues(t, docIds[0], assignment.DocumentID)
 
 	assert.EqualValues(t, pq.Requests[0].State, PrintRequestAssigned)
 }
@@ -140,7 +135,7 @@ func TestPrinterBusyAssignmentRemoved(t *testing.T) {
 	pq := createPrinterQueue()
 	pq.Requests = printRequests[:3]
 	pq.Printers[0].State = PrinterBusy
-	pq.Printers[0].Assignment = createPrintAssignment(0, docIds)
+	pq.Printers[0].Assignment = createPrintAssignment(0)
 	pq.Requests[0].State = PrintRequestAssigned
 
 	pq.Tick()
@@ -155,13 +150,13 @@ func TestPrinterPrintingOtherDocumentAssignmentRemoved(t *testing.T) {
 	pq := createPrinterQueue()
 	pq.Requests = printRequests[:3]
 	pq.Printers[0].State = PrinterPrinting
-	pq.Printers[0].Prints = []Print{
+	pq.Printers[0].Prints = []*Print{
 		{
 			DocumentID: docIds[1],
 			State:      PrintPrinting,
 		},
 	}
-	pq.Printers[0].Assignment = createPrintAssignment(0, docIds)
+	pq.Printers[0].Assignment = createPrintAssignment(0)
 	pq.Requests[0].State = PrintRequestAssigned
 
 	pq.Tick()
@@ -176,7 +171,7 @@ func TestPrinterPrintedOtherDocumentAssignmentNotRemoved(t *testing.T) {
 	pq := createPrinterQueue()
 	pq.Requests = printRequests[:3]
 	pq.Printers[0].State = PrinterPrinting
-	pq.Printers[0].Prints = []Print{
+	pq.Printers[0].Prints = []*Print{
 		{
 			DocumentID: docIds[0],
 			State:      PrintFinished,
@@ -186,7 +181,7 @@ func TestPrinterPrintedOtherDocumentAssignmentNotRemoved(t *testing.T) {
 			State:      PrintFinished,
 		},
 	}
-	pq.Printers[0].Assignment = createPrintAssignment(0, docIds)
+	pq.Printers[0].Assignment = createPrintAssignment(0)
 	pq.Requests[0].State = PrintRequestAssigned
 
 	pq.Tick()
