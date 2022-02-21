@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"github.com/pborman/uuid"
 	"github.com/stretchr/testify/assert"
 	"testing"
 )
@@ -66,12 +65,22 @@ func createPrinterQueue() PrintQueue {
 	}
 	return pq
 }
-func uuidsToStrings(uuids []uuid.UUID) []string {
-	strs := make([]string, len(uuids))
-	for i := range uuids {
-		strs[i] = uuids[i].String()
+func createMultiPrinterQueue(numPrinters int) PrintQueue {
+	resetIds()
+	printers := make([]*Printer, numPrinters)
+	for i := range printers {
+		printers[i] = &Printer{
+			ID:    newPrinterID(),
+			Name:  fmt.Sprintf("P%d", i),
+			State: PrinterIdle,
+			Documents: []Document{
+				{ID: docIds[i]},
+			},
+		}
 	}
-	return strs
+	return PrintQueue{
+		Printers: printers,
+	}
 }
 func createPrintAssignment(i int) *PrintAssignment {
 	return &PrintAssignment{
@@ -80,13 +89,6 @@ func createPrintAssignment(i int) *PrintAssignment {
 		PrinterID:      fmt.Sprintf("P%d", i),
 		DocumentID:     fmt.Sprintf("D%d", i),
 	}
-}
-func getDocIds(docs []Document) []string {
-	var ids []string
-	for _, v := range docs {
-		ids = append(ids, v.ID)
-	}
-	return ids
 }
 
 // Test that we correctly merge the document lists of 2 printers
@@ -192,6 +194,79 @@ func TestPrinterPrintedOtherDocumentAssignmentNotRemoved(t *testing.T) {
 
 // Test that a finished print removes the corresponding assignment
 // and print request
+func TestPrintFinishedErroredUpdatePrintRequest(t *testing.T) {
+	pq := createPrinterQueue()
+	pq.Requests = printRequests[:2]
+
+	pq.Printers[0].State = PrinterIdle
+	pq.Printers[0].Assignment = createPrintAssignment(0)
+	assignment := pq.Printers[0].Assignment
+	pq.Requests[0].State = PrintRequestPrinting
+
+	pq.Printers[1].State = PrinterIdle
+	pq.Printers[1].Assignment = createPrintAssignment(1)
+	assignment2 := pq.Printers[1].Assignment
+	pq.Requests[1].State = PrintRequestPrinting
+
+	pq.Printers[0].Prints = []*Print{
+		{
+			ID:             newPrintId(),
+			AssignmentID:   &assignment.ID,
+			PrintRequestID: &assignment.PrintRequestID,
+			State:          PrintFinished,
+			DocumentID:     assignment.DocumentID,
+		},
+	}
+	pq.Printers[1].Prints = []*Print{
+		{
+			ID:             newPrintId(),
+			AssignmentID:   &assignment2.ID,
+			PrintRequestID: &assignment2.PrintRequestID,
+			State:          PrintError,
+			DocumentID:     assignment2.DocumentID,
+		},
+	}
+
+	pq.Tick()
+	assert.Nil(t, pq.Printers[0].Assignment)
+	assert.Nil(t, pq.Printers[1].Assignment)
+	assert.EqualValues(t, pq.Requests[0].State, PrintRequestFinished)
+	assert.EqualValues(t, pq.Requests[1].State, PrintRequestFinished)
+}
+
+func TestOnlyAssignPendingAssignmentPrintRequests(t *testing.T) {
+	pq := createPrinterQueue()
+	pq.Requests = printRequests
+	pq.Requests[0].State = PrintRequestAssigned
+	pq.Requests[1].State = PrintRequestAssigned
+	pq.Requests[2].State = PrintRequestPendingPrint
+	pq.Requests[3].State = PrintRequestPrinting
+	pq.Printers[0].State = PrinterIdle
+
+	pq.Tick()
+
+	assignment := pq.Printers[0].Assignment
+	assert.Nil(t, assignment)
+}
+
+func TestDontAssignToIdleAssignedPrinter(t *testing.T) {
+	pq := createPrinterQueue()
+
+	p0 := pq.Printers[0]
+	p1 := pq.Printers[1]
+	pq.Requests = printRequests
+	p0.State = PrinterIdle
+
+	pq.Tick()
+	assert.NotNil(t, p0.Assignment)
+	assert.EqualValues(t, p0.Assignment.PrintRequestID, pq.Requests[0].ID)
+	assert.EqualValues(t, p1.Assignment.PrintRequestID, pq.Requests[1].ID)
+
+	assert.EqualValues(t, PrintRequestAssigned, pq.Requests[0].State)
+	assert.EqualValues(t, PrintRequestAssigned, pq.Requests[1].State)
+	assert.EqualValues(t, PrintRequestPendingAssignment, pq.Requests[2].State)
+	assert.EqualValues(t, PrintRequestPendingAssignment, pq.Requests[3].State)
+}
 
 // XXX later, error handling / inconsistent printer states
 // Test that a printer printing their assignment without claiming it are reported
